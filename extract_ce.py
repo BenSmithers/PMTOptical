@@ -21,9 +21,9 @@ from math import pi
 
 from utils import Irregular2DInterpolator
 
-DEBUG = True
+DEBUG = False
 
-PMT_X = 0.417
+PMT_X = 0.417-0.0265
 PMT_Y = 0.297
 
 A = 0.254564663
@@ -49,41 +49,37 @@ def build_interpolator(ptf_data):
     # now move into a theta/azimuth coordinate system 
     xs, ys = np.meshgrid(center_xs, center_ys)
     zs = C*np.sqrt( 1 - (xs/A)**2 - (ys/B)**2)
-    rad = np.sqrt(xs**2 + ys**2 + zs**2)
     
     # cut out the NaNs (outside the PMT region)
     trim = np.logical_not(np.isnan(zs))
-    theta = (zs/rad)[trim].flatten()
-    azi = np.arctan2(ys, xs)[trim].flatten()
-
-    
 
     # and get the detection efficiency at the relevant points
-    det_eff = np.array(data["pmt0"]["det_eff"]).T
+    det_eff = np.array(data["pmt0"]["det_eff"]).T #/np.array(data["monitor"]["det_eff"]).T
     bad_mask = np.isnan(det_eff)
     det_eff[bad_mask] = 0.0 
-    det_eff = det_eff[trim].flatten()   
 
-    plt.scatter(theta, azi*180/pi, c=det_eff, vmin=0, vmax=0.5, cmap='inferno')
+    plt.scatter(xs.flatten(), ys.flatten(), c=det_eff.flatten(), cmap='inferno')
     plt.colorbar()
-    plt.xlabel("cos(zenith)",size=14)
-    plt.ylabel("Azimuth [deg]", size=14)
+    plt.xlabel("X [m]",size=14)
+    plt.ylabel("Y [m]", size=14)
     plt.savefig("./plots/scattered_points.png", dpi=400)
     plt.show()
-    alt = Irregular2DInterpolator(
-        theta, azi, det_eff, interpolation='nearest'
+    print(np.shape(center_xs), np.shape(center_ys), np.shape(det_eff))
+    alt = RectBivariateSpline(
+        center_xs, center_ys, det_eff.T,
     )
 
     if DEBUG:
 
             # since we're no longer on a regular grid, we have to setup an irregular grid interpolator 
-        theta_interp = np.linspace(0, 1, 100)
-        azi_interp = np.linspace(-pi, pi, 100)
-        alt_values = alt(theta_interp, azi_interp, grid=True)
-        plt.pcolormesh(theta_interp, azi_interp*180/pi, alt_values.T, vmin=0, vmax=0.5, cmap='inferno')
+            
+        x_interp = np.linspace(-0.255, 0.255, 100)
+        y_interp = np.linspace(-0.255, 0.255, 101)
+        alt_values = alt(x_interp, y_interp, grid=True)
+        plt.pcolormesh(x_interp, y_interp, alt_values.T, vmin=0, vmax=0.5, cmap='inferno')
         plt.colorbar()
-        plt.xlabel("cos(zenith)",size=14)
-        plt.ylabel("Azimuth [deg]", size=14)
+        plt.xlabel("x[m]",size=14)
+        plt.ylabel("y[m]", size=14)
         plt.savefig("./plots/unwrapped_PDE.png", dpi=400)
         plt.show()
     
@@ -97,18 +93,21 @@ def extract_factor(spline:Irregular2DInterpolator, amat_file):
     data = h5.File(amat_file)
     # now, we evaluate the detector efficiencies 
     a_matrix = np.array(data["a_matrix"][:])
-    print("a shape", np.shape(a_matrix))
+    a_matrix = a_matrix.T
+    for i in range(len(a_matrix)):
+        if np.sum(a_matrix)<1e-3:
+            a_matrix[i][i]=1 
+    a_matrix = a_matrix.T
     
-    theta_edges = np.array(data["theta_edge"])
-    phi_edges = np.array(data["phi_edge"])
+    x_edges = np.array(data["x_edge"])
+    y_edges = np.array(data["y_edge"])
 
     basic_a = np.diag(np.ones(len(a_matrix)))
     a_matrix[np.isnan(a_matrix)]= 1.0 # somehow there are diagonal elements that are nan
 
     toplot = np.log(1+a_matrix)
-    #toplot = a_matrix
     print("{} - {}".format(np.min(toplot), np.max(toplot)))
-    plt.pcolormesh(range(len(a_matrix)+1), range(len(a_matrix)+1), a_matrix,vmin=0, vmax=0.2, cmap='inferno')
+    plt.pcolormesh(range(len(a_matrix)+1), range(len(a_matrix)+1), a_matrix.T,vmin=0, vmax=0.2, cmap='inferno')
     cbar = plt.colorbar()
     plt.title("Transmission Matrix", size=16)
     plt.xlabel("Injected Position [ID]",size=14)
@@ -152,16 +151,16 @@ def extract_factor(spline:Irregular2DInterpolator, amat_file):
         #plt.scatter(theta_pos, phi_pos,c=f_factor, vmin=0, vmax=1)
         plt.show()
 
-    theta_pos = np.array(data["theta_center"][:])
-    phi_pos = np.array(data["phi_center"][:])
+    x_pos = np.array(data["x_center"][:])
+    y_pos = np.array(data["y_center"][:])
 
-    print("{} - {}".format(np.min(theta_pos), np.max(theta_pos)))
-    print("{} - {}".format(np.min(phi_pos), np.max(phi_pos)))
+    print("{} - {}".format(np.min(x_pos), np.max(x_pos)))
+    print("{} - {}".format(np.min(y_pos), np.max(y_pos)))
 
-    print("{} - {}".format(np.shape(theta_pos), np.shape(phi_pos)))
-    evaluate_de = spline(theta_pos, phi_pos, grid=False)
+    print("{} - {}".format(np.shape(x_pos), np.shape(y_pos)))
+    evaluate_de = spline(x_pos, y_pos, grid=False)
 
-    plt.scatter(theta_pos, phi_pos*180/pi, c=evaluate_de, vmin=0, vmax=0.5, cmap='inferno')
+    plt.scatter(x_pos, y_pos, c=evaluate_de, vmin=0, vmax=0.5, cmap='inferno')
     plt.title("Interpolated PDE")
     plt.xlabel("cos(zenith)",size=14)
     plt.ylabel("Azimuth [deg]", size=14)
@@ -175,17 +174,17 @@ def extract_factor(spline:Irregular2DInterpolator, amat_file):
                            "f_factor.h5")
     out = h5.File(outname, 'w')
     out.create_dataset("f_vector", data=f_factor)
-    out.create_dataset("theta_pos", data=theta_pos)
-    out.create_dataset("azi",data=phi_pos)
+    out.create_dataset("x_pos", data=x_pos)
+    out.create_dataset("y_pos",data=y_pos)
     out.close()
 
     boring_f = np.matmul(basic_a, evaluate_de)
 
     print(np.min(f_factor), np.max(f_factor))
 
-    print(len(theta_edges), len(phi_edges), np.shape(f_factor))    
+    print(len(x_edges), len(y_edges), np.shape(f_factor))    
     #plt.scatter(theta_pos*180/pi , phi_pos*180/pi, c=f_factor, vmin=0, vmax=0.5, cmap="inferno", s=40)
-    plt.pcolormesh(theta_edges, phi_edges*180/pi, f_factor.reshape(19,29).T, vmin=0, vmax=0.5, cmap='inferno')
+    plt.pcolormesh(x_edges, y_edges, f_factor.reshape(39,40).T, vmin=0, vmax=0.5, cmap='inferno')
     plt.colorbar()
     plt.xlabel("cos(zenith)",size=14)
     plt.ylabel("Azimuth [deg]", size=14)
@@ -194,7 +193,7 @@ def extract_factor(spline:Irregular2DInterpolator, amat_file):
     plt.savefig("./plots/f_factor.png", dpi=400)
     plt.show()
 
-    plt.pcolormesh(theta_edges, phi_edges*180/pi, 1- boring_f.reshape(19,29).T/f_factor.reshape(19,29).T,vmin=-0.1, vmax=0.1, cmap='RdBu_r')
+    plt.pcolormesh(x_edges, y_edges, 1- (boring_f.reshape(39,40).T/f_factor.reshape(39,40).T),vmin=-0.1, vmax=0.1, cmap='RdBu_r')
     plt.colorbar()
     plt.xlabel("cos(zenith)",size=14)
     plt.ylabel("Azimuth [deg]", size=14)
@@ -203,6 +202,18 @@ def extract_factor(spline:Irregular2DInterpolator, amat_file):
     plt.tight_layout()
     plt.savefig("./plots/fractional.png", dpi=400)
     plt.show()
+
+    re_converted_pde = np.matmul(a_matrix, f_factor)
+    plt.pcolormesh(x_edges, y_edges,re_converted_pde.reshape(39,40).T, cmap='inferno')
+    plt.colorbar()
+    plt.xlabel("x [m]",size=14)
+    plt.ylabel("y [m]", size=14)
+    #plt.title("Comparison", size=16)
+    #plt.gca().set_aspect('equal')
+    plt.tight_layout()
+    plt.savefig("./plots/re_fold_f_factor.png", dpi=400)
+    plt.show()
+
 
 if __name__=="__main__":
     if True:
