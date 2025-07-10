@@ -271,8 +271,18 @@ def build_amat(filename):
     # Take the raw generation values and extrapolate out some bin edges
     raw_thetas =np.linspace(0, 1, 20)    
     raw_phis = np.linspace(-pi, pi, 30)
+    xbin = np.linspace(-0.255, 0.255, 60)
+    ybin = np.linspace(-0.255, 0.255, 61)
 
+    xcenter = 0.5*(xbin[1:] + xbin[:-1])
+    ycenter = 0.5*(ybin[1:] + ybin[:-1])
+
+    xmesh, ymesh = np.meshgrid(xcenter, ycenter)
+    zmesh = C*np.sqrt(1 - (xmesh/A)**2 - (ymesh/B)**2)
     
+    bin_area_weight = np.sqrt(xmesh**2 + ymesh**2 + zmesh**2)/(zmesh)
+    bin_area_weight= bin_area_weight.T
+
     #theta_bins = np.arange(raw_thetas[0] - th_step*0.5, raw_thetas[-1]+th_step*0.51, th_step)
     #phi_bins = np.arange(raw_phis[0]-ph_step*0.5, raw_phis[-1] +ph_step*0.51, ph_step)
 
@@ -297,7 +307,6 @@ def build_amat(filename):
     hit_y =  np.array(data["final_y"])/1000
 
     print("{} - {}".format(np.min(hit_x), np.max(hit_x)))
-    bins = np.linspace(-A, A,100)
 
 
     hit_z =  np.array(data["final_z"])/1000
@@ -309,11 +318,13 @@ def build_amat(filename):
     hit_weights =  is_point_visible(initial_x, initial_y, -90*pi/180 , pi/2, True)
     hit_weights[hit_weights<0]= 0
     hit_weights[hit_weights>0] = 1.0
+
+
+
     print("{} - {}".format(np.min(hit_weights), np.max(hit_weights)))
     #print("{} - {}".format(np.nanmin(hit_weights), np.nanmax(hit_weights)))
-    histo = np.histogram2d(hit_x, hit_y, (bins, bins), weights=hit_weights)[0]
-    
-    plt.pcolormesh(bins ,bins ,histo.T)
+    histo = np.histogram2d(hit_x, hit_y, bins=(xbin, ybin), weights=hit_weights)[0]*bin_area_weight
+    plt.pcolormesh(xbin ,ybin ,np.log10(histo.T))
     plt.xlabel("X [m]", size=14)
     plt.ylabel("Y [m]", size=14)
     plt.colorbar()
@@ -322,12 +333,11 @@ def build_amat(filename):
     plt.show()
 
     # other hitmap 
-    print(hit_theta.min(), hit_theta.max())
-    print(hit_azi.min(), hit_azi.max())
-    histo = np.histogram2d(hit_theta, hit_azi, bins=(raw_thetas, raw_phis), weights=hit_weights)[0]
-    plt.pcolormesh(raw_thetas, raw_phis,histo.T, vmin=0, vmax=histo.max())
-    plt.xlabel("cos(zenith)", size=14)
-    plt.ylabel("Phi", size=14)
+
+    histo = np.histogram2d(hit_x, hit_y, bins=(xbin, ybin), weights=hit_weights)[0]*bin_area_weight
+    plt.pcolormesh(xbin, ybin,np.log10(histo.T))
+    plt.xlabel("x [m]", size=14)
+    plt.ylabel("y [m]", size=14)
     plt.colorbar()
     plt.tight_layout()
     plt.show()
@@ -335,10 +345,10 @@ def build_amat(filename):
 
     photons = np.histogramdd(
         sample = (
-            init_theta, init_azi, hit_theta, hit_azi
+            initial_x, initial_y, hit_x, hit_y
         ),
         bins = (
-            raw_thetas, raw_phis, raw_thetas, raw_phis
+            xbin, ybin, xbin, ybin
         ),
         weights=hit_weights
     )[0]
@@ -351,7 +361,7 @@ def build_amat(filename):
                 #prenorm[ix][iy] = np.ones_like(photons[ix][iy])
                 prenorm[ix][iy][ix][iy] = 1.0
             else:
-                prenorm[ix][iy] += photons[ix][iy]/np.nansum(photons[ix][iy])
+                prenorm[ix][iy] += bin_area_weight[ix][iy]*bin_area_weight*photons[ix][iy]/np.nansum(photons[ix][iy])
             # if there were none detected at this angle, aah... well we still need this to be invertible down the line
             
 
@@ -364,20 +374,19 @@ def build_amat(filename):
                 
                 # count good! 
                 plt.clf()
-                plt.pcolormesh(raw_thetas, raw_phis,prenorm[ix][iy].T, vmin=0, vmax=1)
-                plt.plot(raw_thetas[ix], raw_phis[iy], 'rd')
-                plt.title("{} - {}".format(ix, iy))
-                plt.xlabel(r"$\theta_{hit}$ [rad]")
-                plt.ylabel("$\phi_{hit}$ [rad]")
+                plt.pcolormesh(xbin, ybin,np.log10(prenorm[ix][iy].T))
+                plt.plot(xbin[ix], ybin[iy], 'rd')
+                #plt.title("{} - {}".format(ix, iy))
+                plt.xlabel(r"x [m]")
+                plt.ylabel("y [m]")
                 plt.colorbar()
                 plt.show()
 
     # now we need to encode this data into a simpler matrix
 
-    theta_center = 0.5*(raw_thetas[1:] + raw_thetas[:-1])
-    phi_center = 0.5*(raw_phis[1:] + raw_phis[:-1])
-    print("{} - {} - {}".format(np.shape(theta_center), np.shape(phi_center), np.shape(prenorm)))
-    encoded_a,encode_phi, encode_theta = encode_data(prenorm, theta_center, phi_center)
+    
+    print("{} - {} - {}".format(np.shape(xcenter), np.shape(ycenter), np.shape(prenorm)))
+    encoded_a,encodey, encodex = encode_data(prenorm, xcenter, ycenter)
 
     out_file = os.path.join(
         os.path.dirname(__file__),
@@ -386,10 +395,10 @@ def build_amat(filename):
     )
     dataset = h5.File(out_file, 'w')
     dataset.create_dataset("a_matrix", data=encoded_a)
-    dataset.create_dataset("theta_center", data=encode_theta)
-    dataset.create_dataset("phi_center", data=encode_phi)
-    dataset.create_dataset("theta_edge", data=raw_thetas)
-    dataset.create_dataset("phi_edge", data=raw_phis)
+    dataset.create_dataset("x_center", data=encodex)
+    dataset.create_dataset("y_center", data=encodey)
+    dataset.create_dataset("x_edge", data=xbin)
+    dataset.create_dataset("y_edge", data=ybin)
 
     return prenorm
 
